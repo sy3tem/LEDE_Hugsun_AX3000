@@ -1,4 +1,4 @@
-name: Build LEDE Firmware - Fully Fixed Version
+name: Build LEDE Firmware - Optimized for Space
 
 on:
   workflow_dispatch:  # 允许手动触发工作流
@@ -20,23 +20,21 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install all required dependencies
+    - name: Install only essential dependencies
       run: |
         sudo apt update -y
-        sudo apt full-upgrade -y
+        # 只安装最必要的依赖，减少空间占用
         sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
-        bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext \
-        genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev \
-        libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev \
-        libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf \
-        python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion \
-        swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        bzip2 ccache cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext \
+        git gperf libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+        libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz msmtp ninja-build \
+        p7zip p7zip-full patch pkgconf python3 python3-pyelftools qemu-utils rsync scons squashfs-tools \
+        subversion swig texinfo uglifyjs unzip wget xmlto xxd zlib1g-dev
 
-    - name: Clone LEDE source
+    - name: Clone LEDE source with depth 1
       run: |
-        git clone $LEDE_REPO lede
+        git clone --depth 1 $LEDE_REPO lede
         cd lede
-        git checkout master
 
     - name: Add device definition
       run: |
@@ -53,10 +51,11 @@ jobs:
         TARGET_DEVICES += hugsun_ax3000
         EOF
 
-    - name: Update feeds
+    - name: Update feeds selectively
       run: |
         cd lede
-        ./scripts/feeds update -a
+        # 只更新必要的feeds，减少下载量
+        ./scripts/feeds update packages luci routing telephony
         ./scripts/feeds install -a
 
     - name: Fix Python compilation issue
@@ -65,13 +64,6 @@ jobs:
         # 尝试修复 Python 编译问题
         # 删除可能引起冲突的补丁
         rm -f feeds/packages/lang/python/python3/patches-pip/001-pep517-pyc-fix.patch 2>/dev/null || true
-        
-        # 确保使用正确的 Python 版本
-        if [ -d "feeds/packages/lang/python" ]; then
-          # 更新 Python 相关包
-          ./scripts/feeds update packages
-          ./scripts/feeds install -a -p packages
-        fi
 
     - name: Configure target and custom settings
       run: |
@@ -81,10 +73,6 @@ jobs:
         CONFIG_TARGET_rockchip=y
         CONFIG_TARGET_rockchip_rk35xx=y
         CONFIG_TARGET_rockchip_rk35xx_DEVICE_hugsun_ax3000=y
-        CONFIG_ALL_KMODS=y
-        CONFIG_IB=y
-        CONFIG_IMAGEOPT=y
-        CONFIG_KDIR_TARBALL=y
         # 设置默认主题为argon
         CONFIG_PACKAGE_luci-theme-argon=y
         CONFIG_PACKAGE_luci-app-argon-config=y
@@ -111,6 +99,14 @@ jobs:
         # 禁用可能导致问题的 Python 组件
         CONFIG_PACKAGE_python3-pip=n
         CONFIG_PACKAGE_python3-setuptools=n
+        # 禁用不需要的包以减少空间占用
+        CONFIG_PACKAGE_luci-app-accesscontrol=n
+        CONFIG_PACKAGE_luci-app-adbyby-plus=n
+        CONFIG_PACKAGE_luci-app-aria2=n
+        CONFIG_PACKAGE_luci-app-ddns=n
+        CONFIG_PACKAGE_luci-app-filetransfer=n
+        CONFIG_PACKAGE_luci-app-vsftpd=n
+        CONFIG_PACKAGE_luci-app-xlnetacc=n
         EOF
 
     - name: Apply custom configurations
@@ -240,9 +236,6 @@ jobs:
         net.ipv4.tcp_congestion_control = bbr
         EOF
 
-        # 设置默认root密码
-        echo -e "password\npassword" | passwd files/etc/shadow root 2>/dev/null || echo "无法直接设置密码，将在首次启动时设置"
-
         # 创建首次启动脚本设置密码和运行自定义脚本
         mkdir -p files/etc/uci-defaults
         cat > files/etc/uci-defaults/99-custom-init << 'EOF'
@@ -307,14 +300,45 @@ jobs:
         cd lede
         make defconfig
 
-    - name: Build firmware with retry
+    - name: Clean up before build to save space
+      run: |
+        # 清理系统缓存和临时文件
+        sudo apt clean
+        sudo rm -rf /var/lib/apt/lists/*
+        # 清理GitHub Actions缓存
+        rm -rf ~/.cache/pip
+
+    - name: Build firmware with retry and space optimization
       run: |
         cd lede
         # 尝试编译，如果失败则重试一次
-        if ! make -j$(nproc) V=s; then
-            echo "第一次编译失败，尝试重新编译..."
+        if ! make -j$(($(nproc) - 1)) V=s; then
+            echo "第一次编译失败，尝试清理并重新编译..."
+            # 清理中间文件以释放空间
+            find . -name "*.o" -delete
+            find . -name "*.a" -delete
+            rm -rf tmp/build*
+            # 重新编译，使用单线程减少内存使用
             make -j1 V=s
         fi
+
+    - name: Clean up after build to save space
+      run: |
+        cd lede
+        # 删除下载的软件包源文件（通常很大）
+        rm -rf dl/*
+        # 删除编译过程中的临时文件和中间对象
+        rm -rf tmp/
+        # 删除构建目录中的中间文件
+        find . -name "*.o" -delete
+        find . -name "*.a" -delete
+        # 删除git历史（如果你不需要的话）
+        rm -rf .git
+        # 删除其他可能的大文件或目录
+        rm -rf logs/
+        # 也可以删除feeds中的源代码（编译后不再需要）
+        rm -rf feeds/*/*/src/
+        rm -rf feeds/*/*/.git
 
     - name: Upload firmware artifacts
       uses: actions/upload-artifact@v4
