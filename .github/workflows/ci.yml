@@ -42,13 +42,25 @@ jobs:
         cat > lede/target/linux/rockchip/image/hugsun_ax3000.mk << 'EOF'
         define Device/hugsun_ax3000
           DEVICE_VENDOR := Hugsun
+          DEVICE_MODEL := AX3000
           SOC := rk3528
-          UBOOT_DEVICE_NAME := generic-rk3528
+          UBOOT_DEVICE_NAME := hugsun_ax3000
           IMAGE/sysupgrade.img.gz := boot-common | boot-script rk3528 | pine64-img | gzip | append-metadata
-          DEVICE_MODEL := Hugsun AX3000
           DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware kmod-usb3 kmod-usb-ledtrig-usbport
+          SUPPORTED_DEVICES := hugsun,ax3000
         endef
         TARGET_DEVICES += hugsun_ax3000
+        EOF
+
+        # 添加UBOOT配置
+        cat > lede/target/linux/rockchip/armv8/base-files/etc/board.d/01_leds << 'EOF'
+        boardname="${board_name##*,}"
+        case "$boardname" in
+        hugsun,ax3000)
+            ucidef_set_led_netdev "wan" "WAN" "blue:net" "eth0"
+            ucidef_set_led_default "power" "POWER" "blue:power" "1"
+            ;;
+        esac
         EOF
 
     - name: Update feeds selectively
@@ -170,7 +182,7 @@ jobs:
             option device 'radio1'
             option network 'lan'
             option mode 'ap'
-            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))"
+            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))'
             option encryption 'psk2'
             option key 'password'
         EOF
@@ -327,16 +339,16 @@ jobs:
         cd lede
         echo "检查固件文件是否存在:"
         find bin/targets -type f -name "*.img" -o -name "*.gz" -o -name "*.bin" | head -20 || echo "未找到文件"
-        ls -la bin/targets/rockchip/rk35xx/ || echo "目录不存在"
+        ls -la bin/targets/rockchip/armv8/ || echo "目录不存在"
 
     - name: Upload firmware artifacts
       uses: actions/upload-artifact@v4
       with:
         name: hugsun-ax3000-firmware-diandian
         path: |
-          lede/bin/targets/rockchip/rk35xx/**/*.img
-          lede/bin/targets/rockchip/rk35xx/**/*.gz
-          lede/bin/targets/rockchip/rk35xx/**/*.bin
+          lede/bin/targets/rockchip/armv8/*.img
+          lede/bin/targets/rockchip/armv8/*.gz
+          lede/bin/targets/rockchip/armv8/*.bin
         if-no-files-found: error
         retention-days: 7
 
