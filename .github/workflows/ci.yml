@@ -170,7 +170,7 @@ jobs:
             option device 'radio1'
             option network 'lan'
             option mode 'ap'
-            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))'
+            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))"
             option encryption 'psk2'
             option key 'password'
         EOF
@@ -285,7 +285,7 @@ jobs:
         chmod +x /etc/init.d/oem
         /etc/init.d/oem enable
         
-        # 立即启动服务（在后台运行）
+        # 立即启动服务（在背景运行）
         /etc/init.d/oem start &
         
         exit 0
@@ -322,6 +322,24 @@ jobs:
             make -j1 V=s
         fi
 
+    - name: List firmware files (for debugging)
+      run: |
+        cd lede
+        echo "检查固件文件是否存在:"
+        find bin/targets -type f -name "*.img" -o -name "*.gz" -o -name "*.bin" | head -20 || echo "未找到文件"
+        ls -la bin/targets/rockchip/rk35xx/ || echo "目录不存在"
+
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: hugsun-ax3000-firmware-diandian
+        path: |
+          lede/bin/targets/rockchip/rk35xx/**/*.img
+          lede/bin/targets/rockchip/rk35xx/**/*.gz
+          lede/bin/targets/rockchip/rk35xx/**/*.bin
+        if-no-files-found: error
+        retention-days: 7
+
     - name: Clean up after build to save space
       run: |
         cd lede
@@ -339,13 +357,3 @@ jobs:
         # 也可以删除feeds中的源代码（编译后不再需要）
         rm -rf feeds/*/*/src/
         rm -rf feeds/*/*/.git
-
-    - name: Upload firmware artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: hugsun-ax3000-firmware-diandian
-        path: |
-          lede/bin/targets/rockchip/rk35xx/*.gz
-          lede/bin/targets/rockchip/rk35xx/*.img
-        if-no-files-found: error
-        retention-days: 7
