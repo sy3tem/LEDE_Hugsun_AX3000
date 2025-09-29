@@ -8,7 +8,7 @@ on:
     branches: [ main, master ]
 
 env:
-  LEDE_REPO: https://github.com/coolsnowwolf/lede
+  LEDE_REPO: https://github.com/sy3tem/lede
   FEEDS_CONF: feeds.conf.default
 
 jobs:
