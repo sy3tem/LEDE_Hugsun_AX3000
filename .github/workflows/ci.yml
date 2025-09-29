@@ -36,33 +36,6 @@ jobs:
         git clone --depth 1 $LEDE_REPO lede
         cd lede
 
-    - name: Add device definition
-      run: |
-        # 创建设备定义文件
-        cat > lede/target/linux/rockchip/image/hugsun_ax3000.mk << 'EOF'
-        define Device/hugsun_ax3000
-          DEVICE_VENDOR := Hugsun
-          DEVICE_MODEL := AX3000
-          SOC := rk3528
-          UBOOT_DEVICE_NAME := hugsun_ax3000
-          IMAGE/sysupgrade.img.gz := boot-common | boot-script rk3528 | pine64-img | gzip | append-metadata
-          DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware kmod-usb3 kmod-usb-ledtrig-usbport
-          SUPPORTED_DEVICES := hugsun,ax3000
-        endef
-        TARGET_DEVICES += hugsun_ax3000
-        EOF
-
-        # 添加UBOOT配置
-        cat > lede/target/linux/rockchip/armv8/base-files/etc/board.d/01_leds << 'EOF'
-        boardname="${board_name##*,}"
-        case "$boardname" in
-        hugsun,ax3000)
-            ucidef_set_led_netdev "wan" "WAN" "blue:net" "eth0"
-            ucidef_set_led_default "power" "POWER" "blue:power" "1"
-            ;;
-        esac
-        EOF
-
     - name: Update feeds selectively
       run: |
         cd lede
