@@ -36,6 +36,34 @@ jobs:
         git clone --depth 1 $LEDE_REPO lede
         cd lede
 
+    - name: Add device definition
+      run: |
+        # 创建设备定义文件
+        cat > lede/target/linux/rockchip/image/hugsun_ax3000.mk << 'EOF'
+        define Device/hugsun_ax3000
+          DEVICE_VENDOR := Hugsun
+          DEVICE_MODEL := AX3000
+          SOC := rk3528
+          UBOOT_DEVICE_NAME := hugsun_ax3000
+          IMAGE/sysupgrade.img.gz := boot-common | boot-script rk3528 | pine64-img | gzip | append-metadata
+          DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware kmod-usb3 kmod-usb-ledtrig-usbport
+          SUPPORTED_DEVICES := hugsun,ax3000
+        endef
+        TARGET_DEVICES += hugsun_ax3000
+        EOF
+
+        # 添加UBOOT配置
+        mkdir -p lede/target/linux/rockchip/armv8/base-files/etc/board.d
+        cat > lede/target/linux/rockchip/armv8/base-files/etc/board.d/01_leds << 'EOF'
+        boardname="${board_name##*,}"
+        case "$boardname" in
+        hugsun,ax3000)
+            ucidef_set_led_netdev "wan" "WAN" "blue:net" "eth0"
+            ucidef_set_led_default "power" "POWER" "blue:power" "1"
+            ;;
+        esac
+        EOF
+
     - name: Update feeds selectively
       run: |
         cd lede
@@ -100,6 +128,7 @@ jobs:
         # 创建自定义配置文件目录
         mkdir -p files/etc/config
         mkdir -p files/etc/sysctl.d
+        mkdir -p files/etc/uci-defaults
         
         # 配置网络设置
         cat > files/etc/config/network << 'EOF'
@@ -200,6 +229,7 @@ jobs:
         EOF
 
         # 配置UPNP
+        mkdir -p files/etc/config
         cat > files/etc/config/upnpd << 'EOF'
         config upnpd config
             option enabled '1'
@@ -222,7 +252,6 @@ jobs:
         EOF
 
         # 创建首次启动脚本设置密码和运行自定义脚本
-        mkdir -p files/etc/uci-defaults
         cat > files/etc/uci-defaults/99-custom-init << 'EOF'
         #!/bin/sh
         
@@ -293,11 +322,24 @@ jobs:
         # 清理GitHub Actions缓存
         rm -rf ~/.cache/pip
 
+    - name: Fix potential build issues
+      run: |
+        cd lede
+        # 确保必要的目录存在
+        mkdir -p build_dir/target-aarch64_generic_musl/toolchain/.pkgdir/libc/lib
+        # 修复可能的权限问题
+        chmod -R 755 build_dir
+
     - name: Build firmware with retry and space optimization
       run: |
         cd lede
+        # 先尝试编译工具链
+        echo "开始编译工具链..."
+        make toolchain/install -j$(($(nproc) + 1)) V=s || make toolchain/install -j1 V=s
+        
         # 尝试编译，如果失败则重试一次
-        if ! make -j$(($(nproc) - 1)) V=s; then
+        echo "开始编译固件..."
+        if ! make -j$(($(nproc) + 1)) V=s; then
             echo "第一次编译失败，尝试清理并重新编译..."
             # 清理中间文件以释放空间
             find . -name "*.o" -delete
