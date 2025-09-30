@@ -20,6 +20,12 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Clean workspace
+      run: |
+        # 清理工作区，确保全新开始
+        sudo rm -rf lede
+        sudo rm -rf ~/.ccache
+
     - name: Install only essential dependencies
       run: |
         sudo apt update -y
@@ -300,10 +306,18 @@ jobs:
         cd lede
         make defconfig
 
+    - name: Clean build environment
+      run: |
+        cd lede
+        # 执行make clean确保全新编译
+        make clean
+        # 额外清理可能残留的文件
+        rm -rf tmp/ build_dir/ staging_dir/
+
     - name: Clean up before build to save space
       run: |
         # 清理系统缓存和临时文件
-        sudo apt clean && make clean
+        sudo apt clean
         sudo rm -rf /var/lib/apt/lists/*
         # 清理GitHub Actions缓存
         rm -rf ~/.cache/pip
@@ -314,10 +328,9 @@ jobs:
         # 尝试编译，如果失败则重试一次
         if ! make -j$(($(nproc) - 1)) V=s; then
             echo "第一次编译失败，尝试清理并重新编译..."
-            # 清理中间文件以释放空间
-            find . -name "*.o" -delete
-            find . -name "*.a" -delete
-            rm -rf tmp/build*
+            # 执行更彻底的清理
+            make clean
+            rm -rf tmp/ build_dir/ staging_dir/
             # 重新编译，使用单线程减少内存使用
             make -j1 V=s
         fi
