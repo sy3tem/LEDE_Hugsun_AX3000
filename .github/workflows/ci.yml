@@ -8,7 +8,7 @@ on:
     branches: [ main, master ]
 
 env:
-  LEDE_REPO: https://github.com/coolsnowwolf/lede
+  LEDE_REPO: https://github.com/sy3tem/lede
   FEEDS_CONF: feeds.conf.default
 
 jobs:
@@ -42,20 +42,20 @@ jobs:
         git clone --depth 1 $LEDE_REPO lede
         cd lede
 
-    - name: Add device definition
-      run: |
-        # 创建设备定义文件
-        cat >> lede/target/linux/rockchip/image/armv8.mk << 'EOF'
-        define Device/hugsun_ax3000
-          DEVICE_VENDOR := Hugsun
-          DEVICE_MODEL := AX3000
-          SOC := rk3528
-          IMAGE/sysupgrade.img.gz := boot-common | boot-script rk3528 | pine64-img | gzip | append-metadata
-          DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware kmod-usb3 kmod-usb-ledtrig-usbport
-          SUPPORTED_DEVICES := hugsun,ax3000
-        endef
-        TARGET_DEVICES += hugsun_ax3000
-        EOF
+    #- name: Add device definition
+    #  run: |
+    #    # 创建设备定义文件
+    #    cat >> lede/target/linux/rockchip/image/armv8.mk << 'EOF'
+    #    define Device/hugsun_ax3000
+    #      DEVICE_VENDOR := Hugsun
+    #      DEVICE_MODEL := AX3000
+    #      SOC := rk3528
+    #      IMAGE/sysupgrade.img.gz := boot-common | boot-script rk3528 | pine64-img | gzip | append-metadata
+    #      DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware kmod-usb3 kmod-usb-ledtrig-usbport
+    #      SUPPORTED_DEVICES := hugsun,ax3000
+    #    endef
+    #    TARGET_DEVICES += hugsun_ax3000
+    #    EOF
 
     - name: Update feeds selectively
       run: |
