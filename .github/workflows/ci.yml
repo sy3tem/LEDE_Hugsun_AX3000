@@ -303,7 +303,7 @@ jobs:
     - name: Clean up before build to save space
       run: |
         # 清理系统缓存和临时文件
-        sudo apt clean
+        sudo apt clean && make clean
         sudo rm -rf /var/lib/apt/lists/*
         # 清理GitHub Actions缓存
         rm -rf ~/.cache/pip
