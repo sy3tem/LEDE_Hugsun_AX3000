@@ -259,7 +259,7 @@ jobs:
       run: |
         cd lede
         echo "开始单线程编译以节省内存..."
-        
+        make clean
         # 使用单线程编译，减少临时文件占用
         if ! make -j1 V=s; then
           echo "编译失败，尝试深度清理后重新编译..."
